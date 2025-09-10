@@ -1,4 +1,5 @@
 import axios from "axios";
+import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 
@@ -54,9 +55,22 @@ function createFile(folderPath, fileName, content = "") {
   }
 }
 
+async function executeCommand(cmd = "") {
+  return new Promise((res, rej) => {
+    exec(cmd, (error, data) => {
+      if (error) {
+        return res(`Error running command ${error}`);
+      } else {
+        res(data);
+      }
+    });
+  });
+}
+
 export {
   getWeatherDetailsByCity,
   getGithubUserInfoByUsername,
   createFolder,
   createFile,
+  executeCommand,
 };

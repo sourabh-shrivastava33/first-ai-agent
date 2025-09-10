@@ -4,6 +4,7 @@ import { OpenAI } from "openai";
 import {
   createFile,
   createFolder,
+  executeCommand,
   getGithubUserInfoByUsername,
   getWeatherDetailsByCity,
 } from "./tools.js";
@@ -13,6 +14,7 @@ const TOOL_MAP = {
   getGithubUserInfoByUsername: getGithubUserInfoByUsername,
   createFolder: createFolder,
   createFile: createFile,
+  executeCommand: executeCommand,
 };
 
 const client = new OpenAI();
@@ -36,6 +38,7 @@ The JSON schema (all fields required unless null):
     - getGithubUserInfoByUsername(username: string): Retuns the public info about the github user using github api
     - createFolder(folderName:string): Creates a folder in current working directory
     - createFile(folderPath:string, fileName:string, htmlContent:string): Creates a file in the given folder path with the content
+     - executeCommand(command: string): Takes a linux / unix command as arg and executes the command on user's machine and returns the output
 
 
     Rules:
@@ -43,6 +46,7 @@ The JSON schema (all fields required unless null):
 - The THINK step must be a short plan or checklist (no inner monologue).
 - If you want a tool run, return step = "TOOL" with tool_name and input. Wait for the tool result (the app will call the tool and then send the OBSERVE back to you).
 - If the tool required single argument return input as a string and if tool required multiple argument return object with the named fields in correct sequence of parameters as required by the tool.
+-Return the HTML as a string value in JSON, ensuring all backslashes and quotes are properly escaped.
 
     Output JSON Format:
     { "step": "START | THINK | OUTPUT | OBSERVE | TOOL" , "content": "string", "tool_name": "string", "input": "object" }
@@ -67,7 +71,7 @@ The JSON schema (all fields required unless null):
     {
       role: "user",
       content:
-        "Create a folder called calculatorApp and make a simple calculator using html,css and js also make it attractive with gradient colors",
+        "Push this code to github with a nice commit message and also add a Readme.md file with the details by reading this index.js and tools.js for making sense of purpose of this repo.",
     },
   ];
 
@@ -78,7 +82,18 @@ The JSON schema (all fields required unless null):
     });
 
     const rawContent = response.choices[0].message.content;
-    const parsedContent = JSON.parse(rawContent);
+    let parsedContent = null;
+    try {
+      parsedContent = JSON.parse(rawContent);
+      console.log(`✅ The assistant response is a valid JSON. Response`);
+    } catch (error) {
+      console.log(`❌ The assistant response is not a valid JSON. Response`);
+      messages.push({
+        role: "developer",
+        content: `The assistant response is not a valid JSON. Response: ${rawContent}`,
+      });
+      continue;
+    }
 
     messages.push({
       role: "assistant",
