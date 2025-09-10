@@ -1,53 +1,62 @@
 import "dotenv/config";
 import { OpenAI } from "openai";
-import axios from "axios";
+
+import {
+  createFile,
+  createFolder,
+  getGithubUserInfoByUsername,
+  getWeatherDetailsByCity,
+} from "./tools.js";
+
+const TOOL_MAP = {
+  getWeatherDetailsByCity: getWeatherDetailsByCity,
+  getGithubUserInfoByUsername: getGithubUserInfoByUsername,
+  createFolder: createFolder,
+  createFile: createFile,
+};
 
 const client = new OpenAI();
 
-const getWeatherDetails = async (cityName = "") => {
-  const { data } = await axios.get(
-    `https://wttr.in/${cityName.toLowerCase()}?format=j1`,
-    {
-      responseType: "text",
-    }
-  );
-
-  return `The current weather of ${cityName} is ${data}`;
-};
-
-// console.log(await getWeatherDetails("bilaspur"));
-let TOOL_MAP = {
-  getWeatherDetails: getWeatherDetails,
-};
 async function main() {
   // These api calls are stateless (Chain Of Thought)
   const SYSTEM_PROMPT = `
-    You are an AI assistant who works on START, THINK, TOOL_CALL and OUTPUT format.
-    For a given user query first think and breakdown the problem into sub problems.
-    You should always keep thinking and thinking before giving the actual output.
-    Also, before  the final result to user you must check once if everything is correct.
-    Also add some creativity in the final output to make it more interactive and should provide an important suggestion to user.
+  SYSTEM:
+You are a JSON-only assistant. For every user query respond with exactly one JSON object and nothing else.
+The JSON schema (all fields required unless null):
+{
+  "step": "START|THINK|TOOL|OBSERVE|OUTPUT",
+  "content": "string",        // short textual content or plan; no chain-of-thought
+  "tool_name": "string|null", // name of tool to call for TOOL step, otherwise null
+  "input": "object|null"      // input to the tool for TOOL step, otherwise null
+}
+
+
+    Available Tools:
+    - getWeatherDetailsByCity(cityname: string): Returns the current weather data of the city.
+    - getGithubUserInfoByUsername(username: string): Retuns the public info about the github user using github api
+    - createFolder(folderName:string): Creates a folder in current working directory
+    - createFile(folderPath:string, fileName:string, htmlContent:string): Creates a file in the given folder path with the content
+
 
     Rules:
-    - Strictly follow the output JSON format
-    - Always follow the output in sequence that is START, THINK, TOOL_CALL and OUTPUT.
-    - Always perform only one step at a time and wait for other step.
-    - Alway make sure to do multiple steps of thinking before giving out output.
-
-    Tools available:
-    1. getWeatherDetails(cityName:string): Use this tool to get current weather of a city. Input to this tool is city name only.
+- Output only a single JSON object and nothing else (no explanation, no logs).
+- The THINK step must be a short plan or checklist (no inner monologue).
+- If you want a tool run, return step = "TOOL" with tool_name and input. Wait for the tool result (the app will call the tool and then send the OBSERVE back to you).
+- If the tool required single argument return input as a string and if tool required multiple argument return object with the named fields in correct sequence of parameters as required by the tool.
 
     Output JSON Format:
-    { "step": "START | THINK  | OUTPUT | TOOL_CALL", "content": "string","input":"string","tool":"string" }
+    { "step": "START | THINK | OUTPUT | OBSERVE | TOOL" , "content": "string", "tool_name": "string", "input": "object" }
 
     Example:
-    User: What is the weather of London?
-    ASSISTANT: { "step": "START", "content": "The user wants me find and return the current temprature of London" } 
-    ASSISTANT: { "step": "THINK", "content": "Let me search if there is any tool available to get the current data on the basis of country name" } 
-    ASSISTANT: { "step": "THINK", "content": "I found the tool called getWeatherDetails to get the current weather" } 
-    ASSISTANT: { "step": "TOOL_CALL", "content": "Calling tool getWeatherDetails", "input":"London", "tool":"getWeatherDetails" }
-    DEVELOPER: { "step": "OBSERVE", "content": "The current weather of London is 21°C" } 
-    ASSISTANT: { "step": "OUTPUT", "content": "The current temprature of London is 21°C ,Good to have some outside tour" }
+    User: Hey, can you tell me weather of Patiala?
+    ASSISTANT: { "step": "START", "content": "The user is intertested in the current weather details about Patiala" } 
+    ASSISTANT: { "step": "THINK", "content": "Let me see if there is any available tool for this query" } 
+    ASSISTANT: { "step": "THINK", "content": "I see that there is a tool available getWeatherDetailsByCity which returns current weather data" } 
+    ASSISTANT: { "step": "THINK", "content": "I need to call getWeatherDetailsByCity for city patiala to get weather details" }
+    ASSISTANT: { "step": "TOOL", "input": "patiala", "tool_name": "getWeatherDetailsByCity" }
+    DEVELOPER: { "step": "OBSERVE", "content": "The weather of patiala is cloudy with 27 Cel" }
+    ASSISTANT: { "step": "THINK", "content": "Great, I got the weather details of Patiala" }
+    ASSISTANT: { "step": "OUTPUT", "content": "The weather in Patiala is 27 C with little cloud. Please make sure to carry an umbrella with you. ☔️" }
   `;
 
   const messages = [
@@ -57,7 +66,8 @@ async function main() {
     },
     {
       role: "user",
-      content: "What is the weather of New York,Delhi and Mumbai?",
+      content:
+        "Create a folder called calculatorApp and make a simple calculator using html,css and js also make it attractive with gradient colors",
     },
   ];
 
@@ -82,28 +92,48 @@ async function main() {
 
     if (parsedContent.step === "THINK") {
       console.log(`\t🧠`, parsedContent.content);
-
       continue;
     }
 
-    if (parsedContent.step === "TOOL_CALL") {
-      const toolToCall = TOOL_MAP[parsedContent.tool];
-      if (!toolToCall) {
+    if (parsedContent.step === "TOOL") {
+      const toolToCall = parsedContent.tool_name;
+      if (!TOOL_MAP[toolToCall]) {
         messages.push({
           role: "developer",
-          content: JSON.stringify({
-            step: "OBSERVE",
-            content: `Tool ${parsedContent.tool} not found`,
-          }),
+          content: `There is no such tool as ${toolToCall}`,
         });
+        continue;
       }
-      const toolResp = await toolToCall(parsedContent.input);
+
+      let responseFromTool;
+      try {
+        let input = parsedContent.input;
+
+        // Parse JSON string if necessary
+        if (typeof input === "string" && input.trim().startsWith("{")) {
+          input = JSON.parse(input);
+        }
+
+        if (typeof input === "object" && input !== null) {
+          // Spread object fields as arguments
+          responseFromTool = await TOOL_MAP[toolToCall](
+            ...Object.values(input)
+          );
+        } else {
+          // Pass single string directly
+          responseFromTool = await TOOL_MAP[toolToCall](input);
+        }
+      } catch (err) {
+        responseFromTool = `❌ Error running ${toolToCall}: ${err.message}`;
+      }
+
+      console.log(
+        `🛠️: ${toolToCall}(${JSON.stringify(parsedContent.input)}) =`,
+        responseFromTool
+      );
       messages.push({
         role: "developer",
-        content: JSON.stringify({
-          step: "OBSERVE",
-          content: toolResp,
-        }),
+        content: JSON.stringify({ step: "OBSERVE", content: responseFromTool }),
       });
       continue;
     }
